@@ -39,6 +39,7 @@ THRESHOLDS = [
 
 rank_activity = defaultdict(deque)
 processed_log_ids = set()
+MAX_PROCESSED_IDS = 1000  # Prevent memory leak
 
 # ===============================
 # FUNCTIONS
@@ -59,7 +60,7 @@ async def check_audit_logs():
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=HEADERS) as response:
             if response.status != 200:
-                print("Failed to fetch audit logs.")
+                print("Failed to fetch audit logs:", response.status)
                 return
 
             data = await response.json()
@@ -68,35 +69,58 @@ async def check_audit_logs():
     current_time = time.time()
 
     for log in logs:
-        log_id = log["id"]
+
+        log_id = log.get("id")
+        action_type = log.get("actionType")
+
+        # Skip malformed logs safely
+        if not log_id or not action_type:
+            continue
 
         if log_id in processed_log_ids:
             continue
 
         processed_log_ids.add(log_id)
 
-        if log["actionType"] != "Rank":
+        # Prevent memory overflow
+        if len(processed_log_ids) > MAX_PROCESSED_IDS:
+            processed_log_ids = set(list(processed_log_ids)[-500:])
+
+        # Only track rank actions
+        if "Rank" not in action_type:
             continue
 
-        ranker = log["actor"]["user"]["username"]
-        target = log["description"]
+        actor_data = log.get("actor", {})
+        user_data = actor_data.get("user", {})
+
+        ranker = user_data.get("username")
+        if not ranker:
+            continue
 
         # Store timestamp
         rank_activity[ranker].append(current_time)
 
-        # Clean old timestamps beyond 15 min
+        # Clean old timestamps beyond 15 minutes
         while rank_activity[ranker] and current_time - rank_activity[ranker][0] > 900:
             rank_activity[ranker].popleft()
 
         # Check thresholds
         for count, window, alert_text in THRESHOLDS:
-            recent = [t for t in rank_activity[ranker] if current_time - t <= window]
-            if len(recent) >= count:
+
+            recent_count = sum(
+                1 for t in rank_activity[ranker]
+                if current_time - t <= window
+            )
+
+            if recent_count >= count:
+
                 await send_discord_alert(
                     f"{alert_text}\n\n"
                     f"Ranker: **{ranker}**\n"
-                    f"Promotions in last {window//60} minutes: **{len(recent)}**"
+                    f"Promotions in last {window//60} minutes: **{recent_count}**"
                 )
+
+                # Reset after alert to prevent spam
                 rank_activity[ranker].clear()
                 break
 
@@ -108,12 +132,16 @@ async def check_audit_logs():
 
 async def main():
     print("Mass Rank Detection Bot Running...")
+
     while True:
         try:
             await check_audit_logs()
         except Exception as e:
             print("Error:", e)
 
+        await asyncio.sleep(CHECK_INTERVAL)
+
+asyncio.run(main())
         await asyncio.sleep(CHECK_INTERVAL)
 
 asyncio.run(main())
