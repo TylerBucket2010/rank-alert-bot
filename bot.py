@@ -141,7 +141,6 @@ async def main():
 
         await asyncio.sleep(CHECK_INTERVAL)
 
-asyncio.run(main())
-        await asyncio.sleep(CHECK_INTERVAL)
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
