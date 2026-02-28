@@ -69,7 +69,7 @@ async def check_audit_logs():
     current_time = time.time()
 
     for log in logs:
-
+print(log.get("actionType"))
         log_id = log.get("id")
         action_type = log.get("actionType")
 
@@ -87,8 +87,10 @@ async def check_audit_logs():
             processed_log_ids = set(list(processed_log_ids)[-500:])
 
         # Only track rank actions
-        if "Rank" not in action_type:
-            continue
+      action_type = log.get("actionType", "")
+
+if "Rank" not in action_type:
+    continue
 
         actor_data = log.get("actor", {})
         user_data = actor_data.get("user", {})
