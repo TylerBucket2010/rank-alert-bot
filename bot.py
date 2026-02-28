@@ -39,7 +39,6 @@ THRESHOLDS = [
 
 rank_activity = defaultdict(deque)
 processed_log_ids = set()
-MAX_PROCESSED_IDS = 1000  # Prevent memory leak
 
 # ===============================
 # FUNCTIONS
@@ -69,12 +68,12 @@ async def check_audit_logs():
     current_time = time.time()
 
     for log in logs:
-print(log.get("actionType"))
-        log_id = log.get("id")
-        action_type = log.get("actionType")
 
-        # Skip malformed logs safely
-        if not log_id or not action_type:
+        # Safe extraction
+        log_id = log.get("id")
+        action_type = log.get("actionType", "")
+
+        if not log_id:
             continue
 
         if log_id in processed_log_ids:
@@ -82,51 +81,42 @@ print(log.get("actionType"))
 
         processed_log_ids.add(log_id)
 
-        # Prevent memory overflow
-        if len(processed_log_ids) > MAX_PROCESSED_IDS:
-            processed_log_ids = set(list(processed_log_ids)[-500:])
-
-        # Only track rank actions
-      action_type = log.get("actionType", "")
-
-if "Rank" not in action_type:
-    continue
-
-        actor_data = log.get("actor", {})
-        user_data = actor_data.get("user", {})
-
-        ranker = user_data.get("username")
-        if not ranker:
+        # Catch any rank-related action
+        if "Rank" not in action_type:
             continue
+
+        actor = log.get("actor", {})
+        user_data = actor.get("user", {})
+        ranker = user_data.get("username", "Unknown")
+
+        print(f"Detected rank action by {ranker}")
 
         # Store timestamp
         rank_activity[ranker].append(current_time)
 
-        # Clean old timestamps beyond 15 minutes
+        # Clean timestamps older than 15 minutes (max window)
         while rank_activity[ranker] and current_time - rank_activity[ranker][0] > 900:
             rank_activity[ranker].popleft()
 
         # Check thresholds
         for count, window, alert_text in THRESHOLDS:
+            recent = [t for t in rank_activity[ranker] if current_time - t <= window]
 
-            recent_count = sum(
-                1 for t in rank_activity[ranker]
-                if current_time - t <= window
-            )
-
-            if recent_count >= count:
-
+            if len(recent) >= count:
                 await send_discord_alert(
                     f"{alert_text}\n\n"
                     f"Ranker: **{ranker}**\n"
-                    f"Promotions in last {window//60} minutes: **{recent_count}**"
+                    f"Promotions in last {window//60} minutes: **{len(recent)}**"
                 )
 
-                # Reset after alert to prevent spam
+                print(f"ALERT triggered for {ranker}")
+
+                # Clear to prevent repeat spam
                 rank_activity[ranker].clear()
                 break
 
     print("Audit check complete.")
+
 
 # ===============================
 # MAIN LOOP
